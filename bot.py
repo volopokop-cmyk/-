@@ -12,8 +12,8 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = "8990054244:AAERsDeEzq2tuATUwah04NWMdJlYgRUtYLA"
-ADMIN_ID = 7012441944  # твой Telegram ID (число из @userinfobot)
+TOKEN = os.environ["8990054244:AAERsDeEzq2tuATUwah04NWMdJlYgRUtYLA"]
+ADMIN_ID = int(os.environ["7012441944"])
 
 # Список готовых референсов для кнопки «Выбрать референс».
 PRESETS = [
