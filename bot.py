@@ -12,8 +12,8 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = os.environ["8990054244:AAERsDeEzq2tuATUwah04NWMdJlYgRUtYLA"]
-ADMIN_ID = int(os.environ["7012441944"])
+TOKEN = os.environ["BOT_TOKEN"]
+ADMIN_ID = int(os.environ["ADMIN_ID"])
 
 # Список готовых референсов для кнопки «Выбрать референс».
 PRESETS = [
