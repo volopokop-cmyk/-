@@ -45,6 +45,18 @@ PRESETS = {
     "en": ["Cinematic", "Anime", "Product ad", "Nature & landscape"],
 }
 
+# ---------- Лимиты ----------
+DAILY_VIDEO_LIMIT = 1
+DAILY_PHOTO_LIMIT = 10
+
+# ---------- Файлы ----------
+ORDERS_FILE = "orders.json"
+STATE_FILE = "state.json"
+USAGE_FILE = "usage.json"
+
+BLOCK_SECONDS = 60 * 60  # 1 час
+
+
 # ---------- Тексты ----------
 T = {
     "ru": {
@@ -81,9 +93,29 @@ T = {
                       "🤖 Модель: {model}\n"
                       "✍️ Промт: {prompt}\n\n"
                       "Мы начали генерацию фото. Как только оно будет готово — пришлём его сюда в чат.",
+        "done_video_mutual": "🤝 Взаимная генерация принята!\n\n"
+                             "📋 Ваш заказ:\n"
+                             "🎬 Тип: Видео\n"
+                             "🖼 Референс: {ref}\n"
+                             "🤖 Модель: {model}\n"
+                             "✍️ Промт: {prompt}\n\n"
+                             "Как только результат будет готов — пришлём его сюда в чат.",
+        "done_photo_mutual": "🤝 Взаимная генерация принята!\n\n"
+                             "📋 Ваш заказ:\n"
+                             "🖼 Тип: Фото\n"
+                             "🖼 Референс: {ref}\n"
+                             "🤖 Модель: {model}\n"
+                             "✍️ Промт: {prompt}\n\n"
+                             "Как только результат будет готов — пришлём его сюда в чат.",
         "idle": "Напишите «привет» или нажмите /start, чтобы сделать заказ.",
         "blocked": "⛔ Вы временно заблокированы. Попробуйте снова через {mins} мин.",
         "no_credits": "💳 У сервиса закончились кредиты. Мы свяжемся с вами, когда генерация снова станет доступна.",
+        "limit_video": "🎬 Лимит видео на сегодня исчерпан (1 в день). Попробуйте завтра.",
+        "limit_photo": "🖼 Лимит фото на сегодня исчерпан (10 в день). Попробуйте завтра.",
+        "mutual_offer": "💳 У сервиса временно закончились кредиты.\n\n"
+                        "🤝 Но вы можете помочь взаимно — сгенерировать вместе. "
+                        "Нажмите кнопку ниже, чтобы участвовать во взаимной генерации.",
+        "btn_mutual": "🤝 Помочь взаимно",
     },
     "en": {
         "start": "Hi! I'm the bot of the Sora AI video & photo generation service. "
@@ -119,18 +151,33 @@ T = {
                       "🤖 Model: {model}\n"
                       "✍️ Prompt: {prompt}\n\n"
                       "We have started generating your photo. As soon as it is ready, we'll send it here in the chat.",
+        "done_video_mutual": "🤝 Mutual generation accepted!\n\n"
+                             "📋 Your order:\n"
+                             "🎬 Type: Video\n"
+                             "🖼 Reference: {ref}\n"
+                             "🤖 Model: {model}\n"
+                             "✍️ Prompt: {prompt}\n\n"
+                             "As soon as the result is ready, we'll send it here in the chat.",
+        "done_photo_mutual": "🤝 Mutual generation accepted!\n\n"
+                             "📋 Your order:\n"
+                             "🖼 Type: Photo\n"
+                             "🖼 Reference: {ref}\n"
+                             "🤖 Model: {model}\n"
+                             "✍️ Prompt: {prompt}\n\n"
+                             "As soon as the result is ready, we'll send it here in the chat.",
         "idle": "Write “hi” or press /start to place an order.",
         "blocked": "⛔ You are temporarily blocked. Try again in {mins} min.",
         "no_credits": "💳 The service has run out of credits. We'll contact you when generation is available again.",
+        "limit_video": "🎬 Daily video limit reached (1 per day). Try again tomorrow.",
+        "limit_photo": "🖼 Daily photo limit reached (10 per day). Try again tomorrow.",
+        "mutual_offer": "💳 The service is temporarily out of credits.\n\n"
+                        "🤝 But you can help mutually — generate together. "
+                        "Press the button below to take part in mutual generation.",
+        "btn_mutual": "🤝 Help mutually",
     },
 }
 
 GREETINGS = {"привет", "начать", "старт", "start", "/start", "hi", "hello", "hey"}
-
-ORDERS_FILE = "orders.json"
-STATE_FILE = "state.json"
-
-BLOCK_SECONDS = 60 * 60  # 1 час
 
 
 # ---------- Хранилище ----------
@@ -153,15 +200,25 @@ def save_json(path, data):
 
 
 orders = load_json(ORDERS_FILE, {})          # "id сообщения у админа" -> id клиента
-blocks = load_json(STATE_FILE, {})            # "id клиента" -> timestamp до которого заблокирован
+blocks = load_json(STATE_FILE, {})            # "id клиента" -> timestamp блокировки
+usage = load_json(USAGE_FILE, {})             # "id клиента" -> {"date": "YYYY-MM-DD", "video": n, "photo": n}
 
-# "id сообщения с заказом" -> id клиента (для кнопок у админа)
 order_owner = {k: v for k, v in orders.items()}
 
+# Глобальный флаг кредитов. True = есть, False = нет (включается взаимная генерация).
+# Храним в том же state.json под ключом "__credits__".
+if "__credits__" in blocks:
+    credits_available = bool(blocks.pop("__credits__"))
+else:
+    credits_available = True
 
-def save_orders():
+
+def save_state():
+    state = dict(blocks)
+    state["__credits__"] = credits_available
+    save_json(STATE_FILE, state)
     save_json(ORDERS_FILE, orders)
-    save_json(STATE_FILE, blocks)
+    save_json(USAGE_FILE, usage)
 
 
 # ---------- Блокировки ----------
@@ -172,14 +229,41 @@ def is_blocked(user_id):
     left = int(until - time.time())
     if left <= 0:
         blocks.pop(str(user_id), None)
-        save_orders()
+        save_state()
         return 0
     return left
 
 
 def block_user(user_id, seconds=BLOCK_SECONDS):
     blocks[str(user_id)] = time.time() + seconds
-    save_orders()
+    save_state()
+
+
+# ---------- Лимиты ----------
+def today():
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def get_usage(user_id):
+    uid = str(user_id)
+    rec = usage.get(uid)
+    if not rec or rec.get("date") != today():
+        rec = {"date": today(), "video": 0, "photo": 0}
+        usage[uid] = rec
+    return rec
+
+
+def check_and_reserve(user_id, kind):
+    """Проверяет лимит и сразу увеличивает счётчик. Возвращает None если ок, иначе ключ ошибки."""
+    rec = get_usage(user_id)
+    if kind == "video" and rec["video"] >= DAILY_VIDEO_LIMIT:
+        return "limit_video"
+    if kind == "photo" and rec["photo"] >= DAILY_PHOTO_LIMIT:
+        return "limit_photo"
+    rec[kind] += 1
+    usage[str(user_id)] = rec
+    save_state()
+    return None
 
 
 # ---------- Хелперы ----------
@@ -228,6 +312,12 @@ def main_keyboard(context):
     )
 
 
+def mutual_keyboard(context):
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(tr(context, "btn_mutual"), callback_data="mutual")]]
+    )
+
+
 def model_keyboard():
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(name, callback_data=f"model:{i}")] for i, name in enumerate(MODELS)]
@@ -239,6 +329,10 @@ def admin_order_keyboard(client_id):
         [
             [InlineKeyboardButton("🔒 Заблокировать на час", callback_data=f"admblock:{client_id}")],
             [InlineKeyboardButton("💳 Закончились кредиты", callback_data=f"admcredits:{client_id}")],
+            [
+                InlineKeyboardButton("💳 Кредиты: есть", callback_data="admcredits_on"),
+                InlineKeyboardButton("🚫 Кредиты: нет", callback_data="admcredits_off"),
+            ],
         ]
     )
 
@@ -257,8 +351,16 @@ async def send_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if "lang" not in context.user_data:
         await msg.reply_text("Выберите язык / Choose your language:", reply_markup=lang_keyboard())
-    else:
-        await msg.reply_text(tr(context, "start"), reply_markup=main_keyboard(context))
+        return
+
+    if not credits_available:
+        await msg.reply_text(
+            tr(context, "mutual_offer"),
+            reply_markup=mutual_keyboard(context),
+        )
+        return
+
+    await msg.reply_text(tr(context, "start"), reply_markup=main_keyboard(context))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -266,6 +368,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global credits_available
+
     query = update.callback_query
     await query.answer()
     data = query.data
@@ -301,6 +405,22 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
+    if data == "admcredits_on":
+        if query.from_user.id != ADMIN_ID:
+            return
+        credits_available = True
+        save_state()
+        await msg.reply_text("💳 Кредиты: есть. Взаимная генерация выключена.")
+        return
+
+    if data == "admcredits_off":
+        if query.from_user.id != ADMIN_ID:
+            return
+        credits_available = False
+        save_state()
+        await msg.reply_text("🚫 Кредиты: нет. Включена взаимная генерация для клиентов.")
+        return
+
     # ---------- Кнопки клиента ----------
     user = query.from_user
     left = is_blocked(user.id)
@@ -315,15 +435,24 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("lang:"):
         reset(context)
         context.user_data["lang"] = data.split(":")[1]
+        await send_start(update, context)
+
+    elif data == "mutual":
+        reset(context)
+        context.user_data["mutual"] = True
         await msg.reply_text(tr(context, "start"), reply_markup=main_keyboard(context))
 
     elif data == "own":
         reset(context)
+        if not credits_available:
+            context.user_data["mutual"] = True
         context.user_data["step"] = "ref"
         await msg.reply_text(tr(context, "own"))
 
     elif data == "noref":
         reset(context)
+        if not credits_available:
+            context.user_data["mutual"] = True
         context.user_data["ref_text"] = tr(context, "no_ref")
         context.user_data["ref_msg"] = None
         context.user_data["step"] = "kind"
@@ -338,6 +467,8 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("preset:"):
         idx = int(data.split(":")[1])
         reset(context)
+        if not credits_available:
+            context.user_data["mutual"] = True
         context.user_data["ref_text"] = PRESETS[lang_of(context)][idx]
         context.user_data["ref_msg"] = None
         context.user_data["step"] = "kind"
@@ -346,7 +477,15 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("kind:"):
         if context.user_data.get("step") != "kind":
             return
-        context.user_data["kind"] = data.split(":")[1]  # "video" или "photo"
+        kind = data.split(":")[1]  # "video" или "photo"
+
+        # Проверка лимита сразу при выборе типа
+        err = check_and_reserve(user.id, kind)
+        if err:
+            await msg.reply_text(tr(context, err))
+            return
+
+        context.user_data["kind"] = kind
         context.user_data["step"] = "model"
         await msg.reply_text(tr(context, "pick_model"), reply_markup=model_keyboard())
 
@@ -367,7 +506,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     user = msg.from_user
 
-    # ---------- Сообщения от админа: ответ на заказ ----------
+    # ---------- Сообщения от админа ----------
     if user.id == ADMIN_ID:
         reply = msg.reply_to_message
         if reply and str(reply.message_id) in order_owner:
@@ -420,6 +559,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ref_msg = context.user_data.get("ref_msg")
         model = context.user_data.get("model", "—")
         kind = context.user_data.get("kind", "video")
+        mutual = context.user_data.get("mutual", False) or not credits_available
         lang = lang_of(context)
 
         if ref_msg:
@@ -432,25 +572,29 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             orders[str(ref.message_id)] = user.id
 
         kind_label = "🎬 Видео" if kind == "video" else "🖼 Фото"
+        mutual_label = "\n🤝 Режим: ВЗАИМНАЯ ГЕНЕРАЦИЯ (у сервиса нет кредитов)" if mutual else ""
 
         info = await context.bot.send_message(
             ADMIN_ID,
             f"📥 Новый заказ от {name}\n"
             f"🆔 Клиент: {user.id}\n"
-            f"🌐 Язык клиента: {lang}\n\n"
+            f"🌐 Язык клиента: {lang}{mutual_label}\n\n"
             f"📦 Тип: {kind_label}\n"
             f"🖼 Референс: {ref_text}\n"
             f"🤖 Модель: {model}\n"
             f"✍️ Промт:\n{msg.text}\n\n"
-            f"Ответь (Reply) на это сообщение результатом, и клиент его получит.\n"
-            f"Или используй кнопки ниже.",
+            f"Ответь (Reply) на это сообщение результатом, и клиент его получит.",
             reply_markup=admin_order_keyboard(user.id),
         )
         order_owner[str(info.message_id)] = user.id
         orders[str(info.message_id)] = user.id
-        save_orders()
+        save_state()
 
-        done_key = "done_video" if kind == "video" else "done_photo"
+        if mutual:
+            done_key = "done_video_mutual" if kind == "video" else "done_photo_mutual"
+        else:
+            done_key = "done_video" if kind == "video" else "done_photo"
+
         await msg.reply_text(
             T[lang][done_key].format(ref=ref_text, model=model, prompt=msg.text)
         )
@@ -471,7 +615,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
     app.add_handler(MessageHandler(~filters.COMMAND, handle))
-    print("Бот запущен", flush=True)
+    print(f"Бот запущен. Кредиты: {'есть' if credits_available else 'нет (взаимная генерация)'}", flush=True)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
